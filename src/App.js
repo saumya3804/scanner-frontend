@@ -2,11 +2,11 @@ import React, { useRef, useState, useCallback, useMemo, useEffect } from 'react'
 import Webcam from 'react-webcam';
 import { jsPDF } from "jspdf"; 
 import Cropper from 'react-cropper'; 
-// import "cropperjs/dist/cropper.css"; 
+
 
 import { 
   X, RefreshCw, Upload, History, Download, 
-  Layers, ScanLine, ChevronRight, Plus, Search,
+  Layers, ScanLine, Plus, Search,
   RotateCw, Camera, FilePlus, Copy, Check,
   Maximize2, Scissors, Scaling, Wand2, Crop, Save, Menu
 } from 'lucide-react';
@@ -14,8 +14,9 @@ import axios from 'axios';
 
 const ScannerApp = () => {
   const webcamRef = useRef(null);
-  const fileInputRef = useRef(null); 
-  const appendInputRef = useRef(null); 
+  const fileInputRef = useRef(null); // Standard Upload
+  const appendInputRef = useRef(null); // Append Upload
+  const nativeCameraRef = useRef(null); // NATIVE PHONE CAMERA
   const cropperRef = useRef(null); 
 
   // --- States ---
@@ -103,8 +104,35 @@ const ScannerApp = () => {
     }
   };
 
-  // 2. CAPTURE / UPLOAD
-  const capture = useCallback(() => {
+  // 2. CAPTURE & UPLOAD LOGIC
+
+  // Handler for Native Camera and File Uploads
+  const handleFileChange = (event) => {
+    const files = event.target.files;
+    if (files && files.length > 0) {
+      Array.from(files).forEach(file => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          setPages(prev => {
+            const newPage = { id: Date.now() + Math.random(), original: e.target.result, processed: null, text: "" };
+            // Optional: Auto-trigger boundary detection here if you want it automatic on every upload
+            // handleAutoBoundaryForImage(e.target.result, newPage.id); 
+            return [...prev, newPage];
+          });
+        };
+        reader.readAsDataURL(file);
+      });
+      // Switch to the newly added page
+      setTimeout(() => setActivePageIndex(pages.length), 100);
+    }
+    // Reset inputs
+    if (fileInputRef.current) fileInputRef.current.value = "";
+    if (appendInputRef.current) appendInputRef.current.value = "";
+    if (nativeCameraRef.current) nativeCameraRef.current.value = "";
+  };
+
+  // Web Webcam Capture (Desktop Only)
+  const captureWebcam = useCallback(() => {
     const image = webcamRef.current.getScreenshot();
     if (image) {
       const newPage = { id: Date.now(), original: image, processed: null, text: "" };
@@ -114,23 +142,15 @@ const ScannerApp = () => {
     }
   }, [webcamRef, pages.length]);
 
-  const handleFileUpload = (event) => {
-    const files = event.target.files;
-    if (files && files.length > 0) {
-      Array.from(files).forEach(file => {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          setPages(prev => {
-            const newPage = { id: Date.now() + Math.random(), original: e.target.result, processed: null, text: "" };
-            return [...prev, newPage];
-          });
-        };
-        reader.readAsDataURL(file);
-      });
-      if (pages.length === 0) setActivePageIndex(0);
+  // SMART CAMERA TRIGGER
+  const handleCameraClick = () => {
+    if (isMobile) {
+        // Trigger Native Phone Camera
+        nativeCameraRef.current.click();
+    } else {
+        // Open Web Webcam UI
+        setIsCameraActive(true);
     }
-    if (fileInputRef.current) fileInputRef.current.value = "";
-    if (appendInputRef.current) appendInputRef.current.value = "";
   };
 
   const deletePage = (index) => {
@@ -148,7 +168,7 @@ const ScannerApp = () => {
     try {
         const response = await axios.post('https://scanner-backend-jref.onrender.com/process', { 
             image: activePage.original,
-            filter_type: 'photo' 
+            filter_type: 'photo' // Photo mode in your backend logic applies the perspective warp
         });
         setPages(prev => prev.map((p, i) => 
             i === activePageIndex 
@@ -157,7 +177,7 @@ const ScannerApp = () => {
         ));
     } catch (error) {
         console.error("Auto-boundary failed", error);
-        alert("Could not detect document boundaries.");
+        alert("Could not automatically detect document boundaries.");
     } finally {
         setLoading(false);
     }
@@ -219,15 +239,22 @@ const ScannerApp = () => {
     setShowEditTools(false);
   };
 
-  // Camera Settings for Phone (Back Camera)
-  const videoConstraints = {
-    facingMode: "environment" // Use back camera on mobile
-  };
-
   return (
     <div className="flex h-screen bg-[#F8FAFC] text-slate-900 font-sans overflow-hidden">
-      <input type="file" multiple ref={fileInputRef} onChange={handleFileUpload} accept="image/*" className="hidden" />
-      <input type="file" multiple ref={appendInputRef} onChange={handleFileUpload} accept="image/*" className="hidden" />
+      
+      {/* --- HIDDEN INPUTS --- */}
+      <input type="file" multiple ref={fileInputRef} onChange={handleFileChange} accept="image/*" className="hidden" />
+      <input type="file" multiple ref={appendInputRef} onChange={handleFileChange} accept="image/*" className="hidden" />
+      
+      {/* 🔴 NATIVE CAMERA INPUT (Mobile Only) */}
+      <input 
+        type="file" 
+        accept="image/*" 
+        capture="environment" // Forces back camera on mobile
+        ref={nativeCameraRef} 
+        onChange={handleFileChange} 
+        className="hidden" 
+      />
 
       {/* --- SIDEBAR (Desktop Only) --- */}
       <aside className="hidden md:flex w-72 flex-col bg-white border-r border-slate-200 z-20 shrink-0">
@@ -291,9 +318,11 @@ const ScannerApp = () => {
                     
                     {activePage && !isCameraActive && !isCropping && (
                         <div className="flex gap-1 ml-4">
+                             {/* AUTO BOUNDARY BUTTON */}
                              <button onClick={handleAutoBoundary} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 text-blue-700 rounded-md text-[10px] font-bold hover:bg-blue-100 transition-colors mr-2 whitespace-nowrap">
-                                <Maximize2 size={12}/> Auto
+                                <Maximize2 size={12}/> Auto-Detect
                             </button>
+                            
                             <button onClick={() => setShowEditTools(!showEditTools)} className={`p-1.5 rounded-md transition-colors ${showEditTools ? 'bg-blue-100 text-blue-600' : 'hover:bg-slate-100 text-slate-500'}`} title="Tools">
                                 <Scissors size={16} />
                             </button>
@@ -318,11 +347,6 @@ const ScannerApp = () => {
                 {showEditTools && activePage && !isCameraActive && !isCropping && (
                     <div className="bg-slate-50 border-b border-slate-100 px-4 py-2 flex items-center gap-4 animate-in slide-in-from-top-2 overflow-x-auto">
                         <div className="flex items-center gap-2 border-r border-slate-200 pr-4 shrink-0">
-                            <span className="text-[10px] font-bold text-slate-400">Ratio:</span>
-                            <button onClick={() => manipulateImage('crop', 210/297)} className="text-[10px] font-bold bg-white border px-2 py-1 rounded hover:bg-blue-50">A4</button>
-                            <button onClick={() => manipulateImage('crop', 1)} className="text-[10px] font-bold bg-white border px-2 py-1 rounded hover:bg-blue-50">1:1</button>
-                        </div>
-                        <div className="flex items-center gap-2 shrink-0">
                             <span className="text-[10px] font-bold text-slate-400">Scale:</span>
                             <button onClick={() => manipulateImage('resize', 0.8)} className="text-[10px] font-bold bg-white border px-2 py-1 rounded hover:bg-blue-50">80%</button>
                             <button onClick={() => manipulateImage('resize', 0.5)} className="text-[10px] font-bold bg-white border px-2 py-1 rounded hover:bg-blue-50">50%</button>
@@ -334,22 +358,20 @@ const ScannerApp = () => {
                 <div className="flex-1 bg-slate-100 relative flex items-center justify-center p-2 overflow-hidden min-h-[300px]">
                    {isCameraActive ? (
                         <div className="absolute inset-0 bg-black flex flex-col z-50">
-                            {/* Webcam */}
+                            {/* Webcam (Desktop Only) */}
                             <div className="flex-1 relative overflow-hidden">
                                 <Webcam 
                                     audio={false} 
                                     ref={webcamRef} 
                                     screenshotFormat="image/jpeg" 
-                                    videoConstraints={videoConstraints}
                                     className="w-full h-full object-contain" 
                                 />
                             </div>
-                            {/* Capture Bar */}
                             <div className="h-24 bg-black/80 flex items-center justify-center gap-8 shrink-0 pb-safe">
                                 <button onClick={() => setIsCameraActive(false)} className="bg-slate-800/50 text-white p-3 rounded-full hover:bg-slate-700">
                                     <X size={20} />
                                 </button>
-                                <button onClick={capture} className="w-16 h-16 rounded-full border-4 border-white bg-red-500 shadow-xl active:scale-95 transition-transform"></button>
+                                <button onClick={captureWebcam} className="w-16 h-16 rounded-full border-4 border-white bg-red-500 shadow-xl active:scale-95 transition-transform"></button>
                                 <div className="w-12"></div>
                             </div>
                         </div>
@@ -358,7 +380,7 @@ const ScannerApp = () => {
                             <Cropper
                                 src={activePage.original}
                                 style={{ height: '100%', width: '100%' }}
-                                initialAspectRatio={NaN} 
+                                initialAspectRatio={NaN} // FREE CROP
                                 guides={true}
                                 ref={cropperRef}
                                 viewMode={1}
@@ -378,7 +400,7 @@ const ScannerApp = () => {
                            <p className="text-xs text-slate-400 mb-6">Select a source below</p>
                            <div className="flex gap-3 justify-center">
                               <button onClick={() => fileInputRef.current.click()} className="px-5 py-2 bg-white border border-slate-200 rounded-xl text-sm font-bold hover:shadow-md transition-all">Upload</button>
-                              <button onClick={() => setIsCameraActive(true)} className="px-5 py-2 bg-blue-600 text-white rounded-xl text-sm font-bold hover:shadow-lg hover:shadow-blue-200 transition-all">Camera</button>
+                              <button onClick={handleCameraClick} className="px-5 py-2 bg-blue-600 text-white rounded-xl text-sm font-bold hover:shadow-lg hover:shadow-blue-200 transition-all">Camera</button>
                            </div>
                         </div>
                    )}
@@ -466,7 +488,7 @@ const ScannerApp = () => {
             <div className="fixed bottom-20 md:bottom-6 left-1/2 -translate-x-1/2 w-[95%] md:w-[90%] max-w-2xl bg-white/95 backdrop-blur-xl border border-slate-200 shadow-2xl rounded-2xl p-2 z-40 flex items-center gap-2 md:gap-4 transition-all">
                 {/* 1. THUMBNAILS CAROUSEL */}
                 <div className="flex gap-2 overflow-x-auto max-w-[140px] md:max-w-[350px] no-scrollbar px-2 py-1 border-r border-slate-200 shrink-0">
-                    <button onClick={() => setIsCameraActive(true)} className="w-10 h-14 md:w-12 md:h-16 shrink-0 rounded-lg border-2 border-dashed border-slate-200 bg-slate-50 flex flex-col items-center justify-center text-slate-400 hover:border-blue-500 hover:text-blue-600 hover:bg-white transition-all group" title="Add from Camera">
+                    <button onClick={handleCameraClick} className="w-10 h-14 md:w-12 md:h-16 shrink-0 rounded-lg border-2 border-dashed border-slate-200 bg-slate-50 flex flex-col items-center justify-center text-slate-400 hover:border-blue-500 hover:text-blue-600 hover:bg-white transition-all group" title="Add from Camera">
                         <Camera size={16} className="group-hover:scale-110 transition-transform" />
                     </button>
                     <button onClick={() => appendInputRef.current.click()} className="w-10 h-14 md:w-12 md:h-16 shrink-0 rounded-lg border-2 border-dashed border-slate-200 bg-slate-50 flex flex-col items-center justify-center text-slate-400 hover:border-blue-500 hover:text-blue-600 hover:bg-white transition-all group" title="Add from Files">
