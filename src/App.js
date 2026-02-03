@@ -65,7 +65,7 @@ const ScannerApp = () => {
     setLoading(true);
     
     try {
-      const response = await axios.post('https://scanner-backend-jref.onrender.com', { 
+      const response = await axios.post('https://scanner-backend-jref.onrender.com/process', { 
         image: imgSrc,
         filter_type: filterType 
       });
